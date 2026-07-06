@@ -1,0 +1,41 @@
+# Pipeline output directories (timestamped, created at runtime)
+*_RM_pipe_*/
+
+# BLAST databases built from input genomes
+*.nhr
+*.nin
+*.nsq
+*.nsi
+*.nsd
+*.nos
+*.not
+*.ntf
+*.nto
+
+# Genome index files
+*.fai
+
+# Large intermediate FASTA and alignment files
+*.stk
+*.fa
+*.fasta
+*.fna
+
+# Compressed archives
+*.tar.gz
+*.gz
+*.zip
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Editor and OS files
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
