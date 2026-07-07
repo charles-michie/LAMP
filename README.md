@@ -61,7 +61,7 @@ Pass the directory (not the file stem) as the `cdd_db_dir` argument — the pipe
 ```bash
 git clone https://github.com/yourusername/lamp.git
 cd lamp
-chmod +x LTR_pipeline.sh
+chmod +x LAMP.sh
 ```
 
 No compilation or environment setup is needed beyond the dependencies above.
@@ -71,7 +71,7 @@ No compilation or environment setup is needed beyond the dependencies above.
 ## Usage
 
 ```bash
-bash LTR_pipeline.sh <genome_fasta> <query_ltrs_fasta> <stockholm_file> <cdd_db_dir> [flank_size]
+bash LAMP.sh <genome_fasta> <query_ltrs_fasta> <stockholm_file> <cdd_db_dir> [flank_size]
 ```
 
 ### Arguments
@@ -201,6 +201,10 @@ Identifying a full-length ERV requires finding a locus in `ltr_matched` whose fl
 ---
 
 ## Citation
+
+Currently only in pre-print:
+
+Michie, CAG, et al. (2026) *bioRxiv* (2026): https://www.biorxiv.org/content/10.64898/2026.06.25.734490v1
 
 If you use this pipeline in published work, please cite the dependencies it relies on:
 
