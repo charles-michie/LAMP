@@ -1,6 +1,6 @@
 # LAMP: LTR Annotation and Mining Pipeline
 
-A single-script pipeline for identifying and characterising LTR retrotransposons and endogenous retroviruses (ERVs) in genome assemblies. Starting from [RepeatModeler2](https://github.com/Dfam-consortium/RepeatModeler) output, the pipeline classifies repeat families by structural completeness, maps insertion sites genome-wide, annotates flanking regions with conserved retroviral protein domains (Gag, Pol/RT, Integrase, Env), and produces per-family GFF files ready for inspection in Geneious or any genome browser.
+A single-script pipeline for identifying and characterising LTR retrotransposons and endogenous retroviruses (ERVs) in genome assemblies. Shining a light on the [RepeatModeler2](https://github.com/Dfam-consortium/RepeatModeler) output, the pipeline classifies repeat families by structural completeness, maps insertion sites genome-wide, annotates flanking regions with conserved retroviral protein domains (Gag, Pol/RT, Integrase, Env), and produces per-family GFF files ready for inspection in Geneious or any genome browser.
 
 ---
 
