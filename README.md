@@ -187,7 +187,7 @@ Families are split into three categories that are each BLASTed and annotated ind
 - **`ltr_unmatched`** — LTR families with no INT partner detected.
 - **`int_unmatched`** — INT families with no LTR partner.
 
-Identifying a full-length ERV requires finding a locus in `ltr_matched` whose flanking GFF shows all three domain classes: a Gag domain (e.g. `Gag_p24`, `Gag_MA`), a Pol domain (e.g. `RVT_1`, `rve`), and an Env domain (e.g. `TLV_coat`, `ENV`).
+Identifying a full-length ERV requires finding a locus whose flanking GFF shows all three domain classes: a Gag domain (e.g. `Gag_p24`, `Gag_MA`), a Pol domain (e.g. `RVT_1`, `rve`), and an Env domain (e.g. `TLV_coat`, `ENV`).
 
 ---
 
