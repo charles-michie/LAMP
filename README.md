@@ -184,8 +184,8 @@ The `OriginalBlastHit` attribute records the exact LTR BLAST hit coordinates bef
 Families are split into three categories that are each BLASTed and annotated independently:
 
 - **`ltr_matched`** — LTR families that have a co-located INT partner. These are the strongest candidates for full-length ERVs.
-- **`ltr_unmatched`** — LTR families with no INT partner detected. May represent solo LTRs or highly diverged elements.
-- **`int_unmatched`** — INT families with no LTR partner. May represent internally deleted elements or mis-classified repeats.
+- **`ltr_unmatched`** — LTR families with no INT partner detected.
+- **`int_unmatched`** — INT families with no LTR partner.
 
 Identifying a full-length ERV requires finding a locus in `ltr_matched` whose flanking GFF shows all three domain classes: a Gag domain (e.g. `Gag_p24`, `Gag_MA`), a Pol domain (e.g. `RVT_1`, `rve`), and an Env domain (e.g. `TLV_coat`, `ENV`).
 
