@@ -47,7 +47,9 @@
 #   - Sequences on scaffolds prefixed with "NW_" are excluded from BLAST analysis.
 #     Edit the filter in run_blast_pipeline() if your genome uses different scaffold naming.
 #   - The deduplication step keeps the highest percent-identity hit within a 10 bp window.
-#   - CDD search uses e-value 1e-3 and up to 40 target sequences per query.
+#   - CDD search uses e-value 1e-3 and up to 40 target sequences per query. This was chosen as often the flanking region 
+#     would have many repeated conserved domains and bloats the file. Unfortunately a caveat of this limit is that sometimes
+#     retroviral CDDs are not annotated. Therefore depending on the size of the flanking region you may want to increase this value on line 955. 
 #   - rpstblastn calls are parallelised across families using xargs -P (default 8 parallel jobs).
 #     Adjust CDD_PARALLEL_JOBS below if your system has more/fewer cores available.
 #   - CDD accessions are mapped to human-readable names via a single batched query
