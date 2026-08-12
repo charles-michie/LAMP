@@ -59,7 +59,7 @@ Pass the directory (not the file stem) as the `cdd_db_dir` argument — the pipe
 ## Installation
 
 ```bash
-git clone https://github.com/yourusername/lamp.git
+git clone https://github.com/charles-michie/LAMP.git
 cd lamp
 chmod +x LAMP.sh
 ```
@@ -71,7 +71,7 @@ No compilation or environment setup is needed beyond the dependencies above.
 ## Usage
 
 ```bash
-bash LAMP.sh <genome_fasta> <query_ltrs_fasta> <stockholm_file> <cdd_db_dir> [flank_size]
+bash LAMP.sh <genome_fasta> <RM_query_ltrs_fasta> <RM_stockholm_file> <cdd_db_dir> [flank_size]
 ```
 
 ### Arguments
