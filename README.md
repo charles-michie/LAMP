@@ -1,6 +1,6 @@
 # LAMP: LTR Annotation and Mining Pipeline
 
-A single-script pipeline for identifying and characterising LTR retrotransposons and endogenous retroviruses (ERVs) in genome assemblies. Shining a light on the [RepeatModeler2](https://github.com/Dfam-consortium/RepeatModeler) output, the pipeline classifies repeat families by structural completeness, maps insertion sites genome-wide, annotates flanking regions with conserved retroviral protein domains (Gag, Pol/RT, Integrase, Env), and produces per-family GFF files ready for inspection in Geneious or any genome browser.
+A single-script pipeline for identifying and characterising LTR retrotransposons and endogenous retroviruses (ERVs) in genome assemblies. Shining a light on the [RepeatModeler2](https://github.com/Dfam-consortium/RepeatModeler) output, the pipeline classifies repeat families by structural completeness, maps insertion sites genome-wide, annotates flanking regions with conserved retroviral protein domains (e.g. Gag, RT, Integrase, TM), and produces per-family GFF files ready for inspection in any genome browser.
 
 ---
 
@@ -12,9 +12,8 @@ Full-length ERVs have a characteristic structure: **LTR — GAG — POL — ENV 
 2. Classifies all families into **matched** (LTR+INT pair found) or **unmatched** (LTR-only or INT-only)
 3. BLASTs each category's consensus sequences against the genome to find all insertion sites
 4. Deduplicates overlapping BLAST hits, keeping the highest-identity hit per locus
-5. Extracts flanking regions (default ±14 kb) around each hit and runs `rpstblastn` against the NCBI Conserved Domain Database (CDD) to detect retroviral protein domains
-6. Maps CDD accession numbers to human-readable domain names (e.g. `RVT_1`, `Gag_p24`, `rve`, `ENV`) via a single batched NCBI API query
-7. Writes per-family GFF3 files with domain name, accession, e-value, and the original BLAST hit coordinates embedded as attributes
+5. Extracts flanking regions (default ±14 kb) around each hit and runs `rpstblastn` against the NCBI Conserved Domain Database (CDD) to detect retroviral protein domains and maps CDD accession numbers to human-readable domain names (e.g. `RVT_1`, `Gag_p24`, `rve`)
+6. Writes per-family GFF3 files with domain name, accession, e-value, and the original BLAST hit coordinates embedded as attributes
 
 ---
 
@@ -197,6 +196,7 @@ Identifying a full-length ERV requires finding a locus whose flanking GFF shows 
 - Deduplication uses a 10 bp coordinate tolerance window; this can be adjusted in the `gawk` deduplication block.
 - The BLAST e-value cutoff is `1e-5` with ≥60% query coverage. The CDD e-value cutoff is `1e-3` (permissive, to catch diverged retroviral domains).
 - BLAST databases are cached in the output directory and reused if the script is re-run on the same genome.
+- See the script for more notes
 
 ---
 
