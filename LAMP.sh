@@ -23,6 +23,7 @@
 #   flank_size        (Optional) Flanking region size in bp around BLAST hits (default: 14000)
 #
 # OUTPUTS (all in a timestamped directory):
+#   families_merged.tsv                        - Log of which families were merged by CD-HIT-EST
 #   matched_families_yes.txt                   - Families with at least one LTR-INT pair
 #   matched_families_no.txt                    - Families with no LTR-INT pairs
 #   family_match_results.csv                   - Family-level LTR-INT match pairs
@@ -41,15 +42,13 @@
 #   *_family_sequences_summary.tsv             - Per-category summary table
 #
 # DEPENDENCIES:
-#   python3, blastn, makeblastdb, rpstblastn, samtools, bedtools, gawk, xargs
+#   python3, blastn, makeblastdb, rpstblastn, samtools, bedtools, gawk, xargs, cd-hit-est
 #
 # NOTES:
 #   - Sequences on scaffolds prefixed with "NW_" are excluded from BLAST analysis.
 #     Edit the filter in run_blast_pipeline() if your genome uses different scaffold naming.
 #   - The deduplication step keeps the highest percent-identity hit within a 10 bp window.
-#   - CDD search uses e-value 1e-3 and up to 40 target sequences per query. This was chosen as often the flanking region 
-#     would have many repeated conserved domains and bloats the file. Unfortunately a caveat of this limit is that sometimes
-#     retroviral CDDs are not annotated. Therefore depending on the size of the flanking region you may want to increase this value on line 955. 
+#   - CDD search uses e-value 1e-3 and up to 40 target sequences per query.
 #   - rpstblastn calls are parallelised across families using xargs -P (default 8 parallel jobs).
 #     Adjust CDD_PARALLEL_JOBS below if your system has more/fewer cores available.
 #   - CDD accessions are mapped to human-readable names via a single batched query
@@ -140,27 +139,296 @@ fasta_out_dir="$out_dir/${base_name}_region_fastas"
 mkdir -p "$fasta_out_dir"
 
 # =============================================================================
+# STEP 0: CD-HIT-EST CLUSTERING — within-type redundancy reduction
+# =============================================================================
+# Before LTR-INT matching, consensus sequences are clustered within each repeat
+# type group (LTR vs INT vs other) using cd-hit-est at 80% identity (-c 0.8).
+# This merges highly similar families that RM2 modelled separately, reducing
+# redundancy and improving the accuracy of downstream LTR-INT pairing.
+#
+# For each cluster, the member with the LONGEST alignment length in the
+# cd-hit-est .clstr file is kept as the representative. A log file records
+# every merge so nothing is lost — families_merged.tsv shows which families
+# were absorbed into which representative.
+#
+# Critically, the merged family's Stockholm sequences (genome coordinates) are
+# carried forward under the representative ID. This means the LTR-INT matching
+# step searches all coordinates from all merged members, not just the
+# representative's own sequences, so pairing is not biased by which family
+# happened to be chosen as the centroid.
+#
+# DEPENDENCY: cd-hit-est must be on PATH.
+
+echo "=== Step 0: CD-HIT-EST within-type clustering ==="
+
+# Validate cd-hit-est is available
+if ! command -v cd-hit-est &>/dev/null; then
+    echo "ERROR: cd-hit-est not found on PATH. Please install CD-HIT."
+    exit 1
+fi
+
+# Write the per-type clustering as an embedded Python script.
+# Takes: query_fasta, out_dir, stockholm_file as arguments.
+python3 - "$query_fasta" "$out_dir" "$stockholm_file" << 'CDHIT_SCRIPT'
+import sys
+import os
+import re
+import subprocess
+
+query_fasta    = sys.argv[1]
+out_dir        = sys.argv[2]
+stockholm_file = sys.argv[3]
+
+# -------------------------------------------------------------------------
+# STEP A: Parse the consensus FASTA to extract sequences grouped by type.
+#
+# RM2 FASTA headers have the format:
+#   >FamilyName#Type/Subtype
+# e.g. >ltr-1_family-5#LTR/Unknown
+#        >ltr-1_family-5#INT/Unknown
+#
+# We group sequences into buckets by the top-level type (LTR, INT, or other).
+# Within-type clustering only: LTR never compared against INT.
+# -------------------------------------------------------------------------
+print("Parsing consensus FASTA by type...")
+
+type_buckets = {}   # type_label -> list of (family_id, header, sequence)
+current_id  = None
+current_hdr = None
+current_seq = []
+
+with open(query_fasta) as f:
+    for line in f:
+        line = line.rstrip()
+        if line.startswith('>'):
+            # Save the previous sequence
+            if current_id is not None:
+                type_buckets.setdefault(current_type, []).append(
+                    (current_id, current_hdr, ''.join(current_seq))
+                )
+            current_hdr = line
+            raw_id      = line[1:].split()[0]
+            current_id  = raw_id
+
+            # ----------------------------------------------------------------
+            # Determine the type for bucketing.
+            #
+            # RM2 headers come in two formats:
+            #
+            #   LTR-round families (have Type= in the description):
+            #     >ltr-1_family-2#LTR/ERVK [ Type=INT, Final Multiple Alignment Size = 76 ]
+            #     >ltr-1_family-1#LTR/ERVK [ Type=LTR, Final Multiple Alignment Size = 158 ]
+            #
+            #   Standard RepeatModeler families (no Type= field):
+            #     >rnd-5_family-4524#LTR/ERV1 ( Recon Family Size = 18, ... )
+            #     >rnd-3_family-22#DNA/TcMar-Tc2 ( Recon Family Size = 5, ... )
+            #
+            # Priority:
+            #   1. If a Type= field is present, use it (LTR or INT).
+            #      This correctly separates LTR-round LTR vs INT entries
+            #      that both carry #LTR/... in their ID.
+            #   2. Otherwise fall back to the top-level category from #Type/Subtype
+            #      (e.g. LTR, DNA, LINE, SINE) for standard RM families.
+            # ----------------------------------------------------------------
+            type_eq = re.search(r'Type=([A-Za-z]+)', line)
+            if type_eq:
+                # Use the explicit Type= value — INT or LTR for LTR-round output
+                current_type = type_eq.group(1).upper()
+            else:
+                # Fall back to the category after # in the sequence ID
+                m = re.search(r'#([^/]+)', raw_id)
+                current_type = m.group(1).upper() if m else 'OTHER'
+
+            current_seq = []
+        else:
+            current_seq.append(line)
+    # Final entry
+    if current_id is not None:
+        type_buckets.setdefault(current_type, []).append(
+            (current_id, current_hdr, ''.join(current_seq))
+        )
+
+for t, seqs in type_buckets.items():
+    print(f"  Type {t}: {len(seqs)} families")
+
+# -------------------------------------------------------------------------
+# STEP B: Run cd-hit-est for each type group.
+#
+# -c 0.8    : cluster sequences at 80% identity
+# -aS 0.0   : no minimum alignment coverage (length varies between families)
+# -n 5      : word size appropriate for 0.8 threshold
+# -d 0      : use full sequence description in output
+# -T 0      : use all available threads
+# -M 0      : unlimited memory
+#
+# The representative chosen by cd-hit-est is the first listed in each cluster
+# in the .clstr file (marked with *). We then re-examine all members to find
+# whichever has the longest alignment (>sequence length<) and use that as the
+# true representative — this gives us the most complete consensus sequence.
+# -------------------------------------------------------------------------
+print("Running cd-hit-est per type group...")
+
+# Maps: family_id -> representative_id (after clustering)
+family_to_rep = {}   # includes identity mappings for unclustered families
+
+for type_label, seqs in type_buckets.items():
+    if len(seqs) == 0:
+        continue
+
+    # Write a temporary FASTA for this type group
+    tmp_fasta = os.path.join(out_dir, f"cdhit_input_{type_label}.fa")
+    with open(tmp_fasta, 'w') as f:
+        for fam_id, hdr, seq in seqs:
+            f.write(f"{hdr}\n{seq}\n")
+
+    out_prefix = os.path.join(out_dir, f"cdhit_{type_label}")
+    clstr_file = out_prefix + ".clstr"
+
+    cmd = [
+        'cd-hit-est',
+        '-i', tmp_fasta,
+        '-o', out_prefix,
+        '-c', '0.8',
+        '-n', '5',
+        '-d', '0',
+        '-T', '0',
+        '-M', '0',
+        '-aS', '0.0',
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        print(f"  WARNING: cd-hit-est failed for type {type_label}:")
+        print(result.stderr[:500])
+        # Fall back: treat every family as its own representative
+        for fam_id, _, _ in seqs:
+            family_to_rep[fam_id] = fam_id
+        continue
+
+    # ---- Parse .clstr file ----
+    # Format:
+    #   >Cluster N
+    #   0    Nnt, >FamilyName#Type/Sub... *         <- representative (has *)
+    #   1    Nnt, >FamilyName#Type/Sub... at +/xx%  <- member
+    #
+    # We want: for each cluster, the member with the LARGEST sequence length
+    # becomes the canonical representative (breaking ties by alphabetical ID).
+
+    seq_len_map = {fam_id: len(seq) for fam_id, _, seq in seqs}
+
+    current_cluster_members = []   # list of (seq_len, fam_id)
+    clusters = []                  # list of clusters, each a list of (seq_len, fam_id)
+
+    with open(clstr_file) as f:
+        for line in f:
+            line = line.strip()
+            if line.startswith('>Cluster'):
+                if current_cluster_members:
+                    clusters.append(current_cluster_members)
+                current_cluster_members = []
+            else:
+                # Extract family ID from the cluster line
+                m = re.search(r'>(\S+?)\.\.\.', line)
+                if m:
+                    fam_id = m.group(1)
+                    # Strip leading > if present (cd-hit sometimes includes it)
+                    fam_id = fam_id.lstrip('>')
+                    seq_len = seq_len_map.get(fam_id, 0)
+                    current_cluster_members.append((seq_len, fam_id))
+        if current_cluster_members:
+            clusters.append(current_cluster_members)
+
+    # For each cluster, pick the member with the longest alignment as representative
+    for cluster in clusters:
+        if not cluster:
+            continue
+        # Sort by seq_len descending, then fam_id ascending for tie-breaking
+        cluster_sorted = sorted(cluster, key=lambda x: (-x[0], x[1]))
+        rep_id = cluster_sorted[0][1]
+        for seq_len, fam_id in cluster:
+            family_to_rep[fam_id] = rep_id
+
+    n_in  = len(seqs)
+    n_out = len(set(family_to_rep[fam_id] for fam_id, _, _ in seqs if fam_id in family_to_rep))
+    print(f"  Type {type_label}: {n_in} families -> {n_out} representatives after clustering")
+
+# -------------------------------------------------------------------------
+# STEP C: Write families_merged.tsv — the merge log.
+#
+# Columns: Original_Family  Representative_Family  Merged (Yes/No)
+# A family is "Merged" if its representative is a different family.
+# Families that are their own representative are listed with Merged=No.
+# -------------------------------------------------------------------------
+merged_log = os.path.join(out_dir, "families_merged.tsv")
+with open(merged_log, 'w') as f:
+    f.write("Original_Family\tRepresentative_Family\tMerged\n")
+    for orig, rep in sorted(family_to_rep.items()):
+        merged = "Yes" if orig != rep else "No"
+        f.write(f"{orig}\t{rep}\t{merged}\n")
+
+n_merged = sum(1 for o, r in family_to_rep.items() if o != r)
+print(f"families_merged.tsv written: {n_merged} families absorbed into representatives")
+
+# -------------------------------------------------------------------------
+# STEP D: Write a remapped consensus FASTA.
+#
+# Only representative sequences are written (one per cluster).
+# The FASTA headers are kept exactly as they were for the representative.
+# This remapped FASTA is used for all downstream BLAST steps.
+# -------------------------------------------------------------------------
+rep_ids = set(family_to_rep.values())
+
+remapped_fasta = os.path.join(out_dir, "consensus_remapped.fa")
+with open(remapped_fasta, 'w') as out_f:
+    for type_label, seqs in type_buckets.items():
+        for fam_id, hdr, seq in seqs:
+            if family_to_rep.get(fam_id, fam_id) == fam_id and fam_id in rep_ids:
+                out_f.write(f"{hdr}\n{seq}\n")
+
+print(f"Remapped consensus FASTA written: {remapped_fasta}")
+
+# -------------------------------------------------------------------------
+# STEP E: Write family_to_rep mapping to a file for the Stockholm parser.
+#
+# The Stockholm parsing Python block reads this to expand blocks:
+# when a representative family is found in the Stockholm file, it also
+# pulls in all sequences from any families that were merged into it,
+# so LTR-INT coordinate matching sees the full set of insertion sites.
+# -------------------------------------------------------------------------
+rep_map_file = os.path.join(out_dir, "family_rep_map.tsv")
+with open(rep_map_file, 'w') as f:
+    for orig, rep in family_to_rep.items():
+        f.write(f"{orig}\t{rep}\n")
+
+print(f"family_rep_map.tsv written")
+CDHIT_SCRIPT
+
+# Update query_fasta to point to the remapped (post-clustering) consensus FASTA
+# for all downstream BLAST steps
+query_fasta="$out_dir/consensus_remapped.fa"
+echo "✅ CD-HIT-EST clustering complete — using remapped FASTA: $query_fasta"
+
+# =============================================================================
 # PYTHON SECTION: Stockholm parsing, LTR-INT matching, family classification
 # =============================================================================
-# This replaces type_matches.py and match_process.py as an embedded Python script.
-# It is written to a temp file and executed, then removed.
-#
 # Overview of what the Python does:
 #   1. parse_stockholm_blocks()   - Read the Stockholm file, extract type/ID/coordinates per block
-#   2. match_ltr_int_families()   - Find LTR-INT pairs on the same chromosome within max_distance
-#   3. write_matches_to_csv()     - Write matched pairs to ltr_int_matches.csv
-#   4. write_all_sequences_csv()  - Write all sequences with Matched=Yes/No to all_ltr_int_sequences.csv
-#   5. Family classification      - Group families into yes/no matched lists
-#   6. family_match_results.csv   - Family-level source->target match map
+#   2. remap_blocks_by_clusters() - Merge blocks whose families were clustered together,
+#                                   pooling all sequences under the representative ID
+#   3. match_ltr_int_families()   - Find LTR-INT pairs on the same chromosome within max_distance
+#   4. write_matches_to_csv()     - Write matched pairs to ltr_int_matches.csv
+#   5. write_all_sequences_csv()  - Write all sequences with Matched=Yes/No to all_ltr_int_sequences.csv
+#   6. Family classification      - Group families into yes/no matched lists
+#   7. family_match_results.csv   - Family-level source->target match map
 
-python3 - "$stockholm_file" << 'PYTHON_SCRIPT'
+python3 - "$stockholm_file" "$out_dir/family_rep_map.tsv" << 'PYTHON_SCRIPT'
 import sys
 import re
 import csv
 from collections import defaultdict
 
-# ---- Read the Stockholm file path from command line argument ----
+# ---- Read arguments ----
 stockholm_file = sys.argv[1]
+rep_map_file   = sys.argv[2]   # family_rep_map.tsv written by the CD-HIT-EST step
 
 # -------------------------------------------------------------------------
 # FUNCTION: parse_stockholm_blocks
@@ -323,7 +591,65 @@ def write_all_sequences_csv(blocks, matched_ltr_ids, matched_int_ids, output_fil
                 })
 
 
-# ---- Main execution ----
+# -------------------------------------------------------------------------
+# FUNCTION: remap_blocks_by_clusters
+# Reads the family_rep_map.tsv produced by the CD-HIT-EST step and merges
+# Stockholm blocks so that all sequences from clustered families are pooled
+# under the representative family ID.
+#
+# Why this matters for LTR-INT matching:
+#   If family-A (LTR) and family-B (LTR) were clustered together with
+#   family-A as the representative, family-B's genome coordinates still
+#   need to be searched when looking for an INT partner. Without this step,
+#   those coordinates would be silently dropped and pairing would be
+#   incomplete.
+#
+# The remapped block retains the representative's type and ID. Its sequence
+# list is the union of all members' sequences (deduplicated by seq_id).
+# -------------------------------------------------------------------------
+def remap_blocks_by_clusters(blocks, rep_map_file):
+    # Load family -> representative mapping
+    family_to_rep = {}
+    with open(rep_map_file) as f:
+        for line in f:
+            parts = line.strip().split('\t')
+            if len(parts) >= 2:
+                family_to_rep[parts[0]] = parts[1]
+
+    # Group blocks by their representative ID, merging sequences
+    rep_blocks = {}   # rep_id -> merged block dict
+
+    for block in blocks:
+        orig_id = block['id']
+        rep_id  = family_to_rep.get(orig_id, orig_id)  # default: self
+
+        if rep_id not in rep_blocks:
+            # Initialise with this block (whether it is the rep or a member
+            # encountered first — will be overwritten if the true rep appears)
+            rep_blocks[rep_id] = {
+                'id':        rep_id,
+                'type':      block['type'],
+                'sequences': list(block['sequences']),
+                'members':   [orig_id],
+            }
+        else:
+            # Merge sequences in, deduplicating by full seq_id (5th element)
+            existing_ids = {s[4] for s in rep_blocks[rep_id]['sequences']}
+            for seq in block['sequences']:
+                if seq[4] not in existing_ids:
+                    rep_blocks[rep_id]['sequences'].append(seq)
+                    existing_ids.add(seq[4])
+            rep_blocks[rep_id]['members'].append(orig_id)
+
+        # If this block IS the representative, make sure its type wins
+        if orig_id == rep_id:
+            rep_blocks[rep_id]['type'] = block['type']
+
+    merged_blocks = list(rep_blocks.values())
+    n_merged = sum(1 for b in merged_blocks if len(b['members']) > 1)
+    print(f"  Stockholm blocks: {len(blocks)} original -> {len(merged_blocks)} after cluster remapping "
+          f"({n_merged} representatives carry merged sequences)")
+    return merged_blocks
 
 matched_output  = "ltr_int_matches.csv"
 all_seqs_output = "all_ltr_int_sequences.csv"
@@ -331,10 +657,15 @@ all_seqs_output = "all_ltr_int_sequences.csv"
 # Step 1: Parse Stockholm file into structured blocks
 blocks = parse_stockholm_blocks(stockholm_file)
 
-# Step 2: Identify LTR-INT pairs within 1000 bp proximity
+# Step 2: Remap blocks using CD-HIT-EST cluster assignments.
+# Sequences from merged families are pooled under their representative
+# so that LTR-INT coordinate matching sees the full set of insertion sites.
+blocks = remap_blocks_by_clusters(blocks, rep_map_file)
+
+# Step 3: Identify LTR-INT pairs within 1000 bp proximity
 matches, matched_ltr_ids, matched_int_ids = match_ltr_int_families(blocks, max_distance=1000)
 
-# Step 3: Write sequence-level outputs
+# Step 4: Write sequence-level outputs
 write_matches_to_csv(matches, matched_output)
 write_all_sequences_csv(blocks, matched_ltr_ids, matched_int_ids, all_seqs_output)
 

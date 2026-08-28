@@ -1,6 +1,6 @@
 # LAMP: LTR Annotation and Mining Pipeline
 
-A single-script pipeline for identifying and characterising LTR retrotransposons and endogenous retroviruses (ERVs) in genome assemblies. Shining a light on the [RepeatModeler2](https://github.com/Dfam-consortium/RepeatModeler) output, the pipeline classifies repeat families by structural completeness, maps insertion sites genome-wide, annotates flanking regions with conserved retroviral protein domains (e.g. Gag, RT, Integrase, TM), and produces per-family GFF files ready for inspection in any genome browser.
+A single-script pipeline for identifying and characterising LTR retrotransposons and endogenous retroviruses (ERVs) in genome assemblies. Starting from [RepeatModeler2](https://github.com/Dfam-consortium/RepeatModeler) output, the pipeline classifies repeat families by structural completeness, maps insertion sites genome-wide, annotates flanking regions with conserved retroviral protein domains (Gag, Pol/RT, Integrase, Env), and produces per-family GFF files ready for inspection in Geneious or any genome browser.
 
 ---
 
@@ -8,12 +8,14 @@ A single-script pipeline for identifying and characterising LTR retrotransposons
 
 Full-length ERVs have a characteristic structure: **LTR — GAG — POL — ENV — LTR**. RepeatModeler2 models LTR and internal (INT) domains as separate families. This pipeline:
 
-1. Parses the RepeatModeler2 Stockholm alignment file to identify which LTR families have a co-located INT partner (within 1 kb) — these are candidates for full-length elements
-2. Classifies all families into **matched** (LTR+INT pair found) or **unmatched** (LTR-only or INT-only)
-3. BLASTs each category's consensus sequences against the genome to find all insertion sites
-4. Deduplicates overlapping BLAST hits, keeping the highest-identity hit per locus
-5. Extracts flanking regions (default ±14 kb) around each hit and runs `rpstblastn` against the NCBI Conserved Domain Database (CDD) to detect retroviral protein domains and maps CDD accession numbers to human-readable domain names (e.g. `RVT_1`, `Gag_p24`, `rve`)
-6. Writes per-family GFF3 files with domain name, accession, e-value, and the original BLAST hit coordinates embedded as attributes
+1. Parses the RepeatModeler2 Stockholm alignment file to group families by type (LTR, INT, other), then clusters consensus sequences within each type group using `cd-hit-est` at 80% identity — keeping the longest representative and logging all merges to `families_merged.tsv`
+2. Identifies which LTR families have a co-located INT partner (within 1 kb) across all insertion sites — including coordinates from any families merged into a representative by clustering
+3. Classifies all families into **matched** (LTR+INT pair found) or **unmatched** (LTR-only or INT-only)
+4. BLASTs each category's consensus sequences against the genome to find all insertion sites
+5. Deduplicates overlapping BLAST hits, keeping the highest-identity hit per locus
+6. Extracts flanking regions (default ±14 kb) around each hit and runs `rpstblastn` against the NCBI Conserved Domain Database (CDD) to detect retroviral protein domains
+7. Maps CDD accession numbers to human-readable domain names (e.g. `RVT_1`, `Gag_p24`, `rve`, `TLV_coat`) via a single batched NCBI API query
+8. Writes per-family GFF3 files with domain name, accession, e-value, and the original BLAST hit coordinates embedded as attributes
 
 ---
 
@@ -31,6 +33,7 @@ All tools must be available on your `PATH`.
 |---|---|---|
 | `bash` | ≥ 4.0 | Pipeline execution |
 | `python3` | ≥ 3.7 | Stockholm parsing, NCBI API query |
+| `cd-hit-est` | CD-HIT ≥ 4.8 | Within-type consensus sequence clustering |
 | `blastn` / `makeblastdb` | BLAST+ ≥ 2.12 | Genome-wide LTR insertion site search |
 | `rpstblastn` | BLAST+ ≥ 2.12 | CDD domain annotation of flanking regions |
 | `samtools` | ≥ 1.15 | Genome FASTA indexing |
@@ -58,9 +61,9 @@ Pass the directory (not the file stem) as the `cdd_db_dir` argument — the pipe
 ## Installation
 
 ```bash
-git clone https://github.com/charles-michie/LAMP.git
+git clone https://github.com/charlesmichie/lamp.git
 cd lamp
-chmod +x LAMP.sh
+chmod +x LTR_pipeline.sh
 ```
 
 No compilation or environment setup is needed beyond the dependencies above.
@@ -70,7 +73,7 @@ No compilation or environment setup is needed beyond the dependencies above.
 ## Usage
 
 ```bash
-bash LAMP.sh <genome_fasta> <RM_query_ltrs_fasta> <RM_stockholm_file> <cdd_db_dir> [flank_size]
+bash LTR_pipeline.sh <genome_fasta> <query_ltrs_fasta> <stockholm_file> <cdd_db_dir> [flank_size]
 ```
 
 ### Arguments
@@ -132,6 +135,8 @@ All outputs are written to a timestamped directory: `<genome_basename>_RM_pipe_<
 
 | File | Description |
 |---|---|
+| `families_merged.tsv` | Log of all CD-HIT-EST merges: original family, representative, merged yes/no |
+| `consensus_remapped.fa` | Post-clustering consensus FASTA (one sequence per representative) |
 | `matched_families_yes.txt` | Family IDs with at least one LTR–INT pair identified |
 | `matched_families_no.txt` | Family IDs with no LTR–INT pair |
 | `family_match_results.csv` | Family-level LTR→INT match pairs |
@@ -183,35 +188,33 @@ The `OriginalBlastHit` attribute records the exact LTR BLAST hit coordinates bef
 Families are split into three categories that are each BLASTed and annotated independently:
 
 - **`ltr_matched`** — LTR families that have a co-located INT partner. These are the strongest candidates for full-length ERVs.
-- **`ltr_unmatched`** — LTR families with no INT partner detected.
-- **`int_unmatched`** — INT families with no LTR partner.
+- **`ltr_unmatched`** — LTR families with no INT partner detected. May represent solo LTRs or highly diverged elements.
+- **`int_unmatched`** — INT families with no LTR partner. May represent internally deleted elements or mis-classified repeats.
 
-Identifying a full-length ERV requires finding a locus whose flanking GFF shows all three domain classes: a Gag domain (e.g. `Gag_p24`, `Gag_MA`), a Pol domain (e.g. `RVT_1`, `rve`), and an Env domain (e.g. `TLV_coat`, `ENV`).
+Identifying a full-length ERV requires finding a locus in `ltr_matched` whose flanking GFF shows all three domain classes: a Gag domain (e.g. `Gag_p24`, `Gag_MA`), a Pol domain (e.g. `RVT_1`, `rve`), and an Env domain (e.g. `TLV_coat`, `ENV`).
 
 ---
 
 ## Notes
 
-- Sequences on scaffolds prefixed `NW_` are excluded from BLAST analysis (NCBI unplaced scaffold convention). Edit the `awk` filter in `run_blast_pipeline()` if your assembly uses a different naming scheme.
+- CD-HIT-EST clustering is run at 80% identity (`-c 0.8`). The representative for each cluster is the member with most sequences found in RM (Final Multiple Alignment Size = XXX). Merged families contribute their genome coordinates to the representative for the purposes of LTR–INT matching, so no insertion sites are lost. The merge log (`families_merged.tsv`) records every merge for full traceability.
+- Sequences on scaffolds prefixed `NW_` are excluded from BLAST analysis (NCBI unplaced scaffold convention). Edit the `awk` filter in `run_blast_pipeline()` if your assembly uses a different naming scheme or you want to include these. 
 - Deduplication uses a 10 bp coordinate tolerance window; this can be adjusted in the `gawk` deduplication block.
 - The BLAST e-value cutoff is `1e-5` with ≥60% query coverage. The CDD e-value cutoff is `1e-3` (permissive, to catch diverged retroviral domains).
+    - To prevent excessive amounts of conserved domains being labelled the max target sequences for the RPSTBLASTN with CDD was capped at 40, however in rare cases this means actual retroviral conserved domains have not been annotated due to other conserved domains having better e-values. This will only impact the very occasional sequence and it is usually easy to tell. Feel free to increase this limit, but be warned depending on your chosen flank size this may result in extremely large GFF files with unrelated conserved domains. Solution coming soon! 
 - BLAST databases are cached in the output directory and reused if the script is re-run on the same genome.
-- See the script for more notes
 
 ---
 
 ## Citation
 
-Currently only in pre-print:
+Currently the accompying paper with this pipeline is only in preprint: Michie C et al. (2026) *bioRxiv* https://www.biorxiv.org/content/10.64898/2026.06.25.734490v1.abstract
 
-Michie, CAG, et al. (2026) *bioRxiv* (2026): https://www.biorxiv.org/content/10.64898/2026.06.25.734490v1
-
-If you use this pipeline in published work, please cite the dependencies it relies on:
+Dependencies references: 
 
 - **RepeatModeler2**: Flynn JM et al. (2020) *PNAS* 117(17):9451–9457
 - **BLAST+**: Camacho C et al. (2009) *BMC Bioinformatics* 10:421
-- **BEDTools**: Quinlan AR & Hall IM (2010) *Bioinformatics* 26(6):841–842
-- **SAMtools**: Danecek P et al. (2021) *GigaScience* 10(2):giab008
+- **CD-HIT**: Fu L et al. (2012) *Bioinformatics* 3150-3152
 - **NCBI CDD**: Lu S et al. (2020) *Nucleic Acids Research* 48(D1):D265–D268
 
 ---
