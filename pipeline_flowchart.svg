@@ -51,7 +51,7 @@
   <!-- Stage 1: CD-HIT-EST clustering -->
   <rect x="110" y="234" width="460" height="66" rx="8" stroke-width="0.5" class="box-purple"/>
   <text x="340" y="256" text-anchor="middle" class="title t-purple-title">Stage 1: Within-type consensus clustering</text>
-  <text x="340" y="275" text-anchor="middle" class="sub t-purple-sub">cd-hit-est · 80% identity · LTR vs LTR, INT vs INT · keep longest representative</text>
+  <text x="340" y="275" text-anchor="middle" class="sub t-purple-sub">cd-hit-est · 80% identity · LTR vs LTR, INT vs INT · keep representative with most sequences</text>
 
   <!-- Side output: families_merged.tsv -->
   <line x1="570" y1="267" x2="614" y2="267" stroke-width="1" marker-end="url(#arrow)" class="arr"/>
